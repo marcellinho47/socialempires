@@ -23,11 +23,14 @@ def command(USERID, data):
     tries = data["tries"]
     publishActions = data["publishActions"]
     commands = data["commands"]
-    
+
     for i, comm in enumerate(commands):
         cmd = comm["cmd"]
         args = comm["args"]
-        do_command(USERID, cmd, args)
+        try:
+            do_command(USERID, cmd, args)
+        except (IndexError, KeyError, TypeError, ValueError) as e:
+            print(f"\n [!] COMMAND FAILED: cmd={cmd} args={args} -> {type(e).__name__}: {e}")
     save_session(USERID) # Save session
 
 def do_command(USERID, cmd, args):
@@ -48,10 +51,14 @@ def do_command(USERID, cmd, args):
         type = args[7]
         print("Add", str(get_name_from_item_id(id)), "at", f"({x},{y})")
         collected_at_timestamp = timestamp_now()
-        level = 0 # TODO 
+        level = 0 # TODO
         orientation = 0
         map = save["maps"][town_id]
-        if not bool_dont_modify_resources:
+        # CHE-7: only honor the "free item" flag during tutorial (initial buildings).
+        # After tutorial completes, always charge — prevents client from faking free items.
+        tutorial_active = save["playerInfo"].get("completed_tutorial", 0) == 0
+        free_ok = bool_dont_modify_resources and tutorial_active
+        if not free_ok:
             apply_cost(save["playerInfo"], map, id, price_multiplier)
             xp = int(get_attribute_from_item_id(id, "xp"))
             map["xp"] = map["xp"] + xp
@@ -132,18 +139,26 @@ def do_command(USERID, cmd, args):
     elif cmd == Constant.CMD_COMPLETE_MISSION:
         mission_id = args[0]
         skipped_with_cash = bool(args[1])
+        # CHE-2: ignore duplicates (client could spam to re-complete)
+        if mission_id in save["privateState"].get("completedMissions", []):
+            print(f"  Mission {mission_id} already completed, skipping")
+            return
         print("Complete mission", mission_id, ":", str(get_attribute_from_mission_id(mission_id, "title")))
         if skipped_with_cash:
-            cash_to_substract = 0 # TODO 
+            cash_to_substract = 0 # TODO
             save["playerInfo"]["cash"] = max(save["playerInfo"]["cash"] - cash_to_substract, 0)
         save["privateState"]["completedMissions"] += [mission_id]
-    
+
     elif cmd == Constant.CMD_REWARD_MISSION:
         town_id = args[0]
         mission_id = args[1]
+        # CHE-2: reject re-claim — prevents infinite reward farming
+        if mission_id in save["privateState"].get("rewardedMissions", []):
+            print(f"  Mission {mission_id} already rewarded, skipping")
+            return
         print("Reward mission", mission_id, ":", str(get_attribute_from_mission_id(mission_id, "title")))
         reward = int(get_attribute_from_mission_id(mission_id, "reward")) # gold
-        save["maps"][town_id]["coins"] += reward   
+        save["maps"][town_id]["coins"] += reward
         save["privateState"]["rewardedMissions"] += [mission_id]
     
     elif cmd == Constant.CMD_PUSH_UNIT:
@@ -195,13 +210,38 @@ def do_command(USERID, cmd, args):
             map["items"] += [[unit_id, unit_x, unit_y, orientation, collected_at_timestamp, level]]
     
     elif cmd == Constant.CMD_RT_LEVEL_UP:
-        new_level = args[0]
-        print("Level Up!:", new_level)
+        requested_level = int(args[0])
         map = save["maps"][0] # TODO : xp must be general, since theres no given town_id
-        map["level"] = args[0]
+        current_level = int(map.get("level", 1))
+        # CHE-3: cap level-up at +1 per command; client can't jump 99 levels
+        new_level = min(requested_level, current_level + 1)
+        if new_level != requested_level:
+            print(f"Level Up capped: requested {requested_level}, granted {new_level} (was {current_level})")
+        else:
+            print("Level Up!:", new_level)
+        map["level"] = new_level
         current_xp = map["xp"]
         min_expected_xp = get_xp_from_level(max(0, new_level - 1))
         map["xp"] = max(min_expected_xp, current_xp) # try to fix problems with not counting XP... by keeping up with client-side level counting
+        # Apply level-up reward from game config (c=cash, g=gold, w=wood, f=food, s=stone)
+        try:
+            level_info = get_game_config()["levels"][int(new_level)]
+            rtype = level_info.get("reward_type")
+            amount = int(level_info.get("reward_amount", 0))
+            if amount > 0:
+                if rtype == "c":
+                    save["playerInfo"]["cash"] += amount
+                elif rtype == "g":
+                    map["coins"] += amount
+                elif rtype == "w":
+                    map["wood"] += amount
+                elif rtype == "f":
+                    map["food"] += amount
+                elif rtype == "s":
+                    map["stone"] += amount
+                print(f"  Level-up reward: +{amount} {rtype}")
+        except (IndexError, KeyError, TypeError, ValueError) as e:
+            print(f"  Level-up reward skipped: {e}")
 
     elif cmd == Constant.CMD_RT_PUBLISH_SCORE:
         new_xp = args[0]
@@ -238,8 +278,22 @@ def do_command(USERID, cmd, args):
 
     elif cmd == Constant.CMD_EXCHANGE_CASH:
         town_id = args[0]
-        print("Exchange cash -> coins.")
-        save["playerInfo"]["cash"] = max(save["playerInfo"]["cash"] - 5, 0)#maybe make function for editing resources
+        # CHE-8: cap to 10 exchanges per rolling 24h — prevents infinite cash→gold loop.
+        EXCHANGE_DAILY_LIMIT = 10
+        EXCHANGE_WINDOW_SEC = 24 * 3600
+        ps = save["privateState"]
+        now = timestamp_now()
+        last_reset = ps.get("exchangeCashResetAt", 0)
+        if now - last_reset >= EXCHANGE_WINDOW_SEC:
+            ps["exchangeCashCount"] = 0
+            ps["exchangeCashResetAt"] = now
+        count = ps.get("exchangeCashCount", 0)
+        if count >= EXCHANGE_DAILY_LIMIT:
+            print(f"  Exchange denied: daily limit ({EXCHANGE_DAILY_LIMIT}) reached")
+            return
+        ps["exchangeCashCount"] = count + 1
+        print(f"Exchange cash -> coins ({ps['exchangeCashCount']}/{EXCHANGE_DAILY_LIMIT} today)")
+        save["playerInfo"]["cash"] = max(save["playerInfo"]["cash"] - 5, 0)
         save["maps"][town_id]["coins"] += 2500
 
     elif cmd == Constant.CMD_STORE_ITEM:
@@ -324,14 +378,15 @@ def do_command(USERID, cmd, args):
         pState["timeStampTakeCare"] = -1 # remove timer
 
     elif cmd == Constant.CMD_DRAGON_BUY_STEP_CASH:
-        price = args[0]
-        print("Buy dragon step with cash.")
+        # CHE-9: client sends price; enforce a minimum so they can't skip for free.
+        price = max(int(args[0]), 5)
+        print(f"Buy dragon step with cash ({price}).")
         save["playerInfo"]["cash"] = max(int(save["playerInfo"]["cash"] - price), 0)
         save["privateState"]["timeStampTakeCare"] = -1 # remove timer
 
     elif cmd == Constant.CMD_RIDER_BUY_STEP_CASH:
-        price = args[0]
-        print("Buy rider step with cash.")
+        price = max(int(args[0]), 5)
+        print(f"Buy rider step with cash ({price}).")
         save["playerInfo"]["cash"] = max(int(save["playerInfo"]["cash"] - price), 0)
         save["privateState"]["riderTimeStamp"] = -1 # remove timer
 
@@ -366,8 +421,8 @@ def do_command(USERID, cmd, args):
                 break
     
     elif cmd == Constant.CMD_MONSTER_BUY_STEP_CASH:
-        price = args[0]
-        print("Buy monster step with cash.")
+        price = max(int(args[0]), 5)
+        print(f"Buy monster step with cash ({price}).")
         save["playerInfo"]["cash"] = max(int(save["playerInfo"]["cash"] - price), 0)
         save["privateState"]["timeStampTakeCareMonster"] = -1 # remove timer
     
@@ -435,14 +490,12 @@ def do_command(USERID, cmd, args):
         pState["timestampLastBonus"] = timestamp_now()
 
     elif cmd == Constant.CMD_ADMIN_ADD_ANIMAL:
-        subcatFunc = str(args[0])
-        toBeAdded = int(args[1])
-        print("Added", toBeAdded, get_item_from_subcat_functional(subcatFunc)["name"])
+        # CHE-1: Client-facing "admin" command disabled. Original would let any
+        # client add arbitrary animals. Kept as no-op so the route doesn't log
+        # "Unhandled command" noise, but grants nothing.
+        print("  CMD_ADMIN_ADD_ANIMAL ignored (anti-cheat)")
 
-        # TODO
-        oAnimals: dict = save["privateState"]["arrayAnimals"]
-        oAnimals[subcatFunc] = toBeAdded + (oAnimals[subcatFunc] if subcatFunc in oAnimals else 0)
-    
+
     elif cmd == Constant.CMD_GRAVEYARD_BUY_POTIONS:
         # no args
         print("Graveyard buy potion")
@@ -462,27 +515,35 @@ def do_command(USERID, cmd, args):
         town_id = args[3]
         bool_used_potion = len(args) > 4 and args[4] == '1'
         print("Resurrect", str(get_name_from_item_id(unit_id)), "from graveyard")
+        map = save["maps"][town_id]
         # pay
         if bool_used_potion:
             quantity = 1
             save["privateState"]["potion"] = max(int(save["privateState"]["potion"] - quantity), 0)
         else:
-            pass # TODO 
-        # Place unit
+            price_cash = get_game_config()["globals"]["GRAVEYARD_POTIONS"]["price"]["c"]
+            save["playerInfo"]["cash"] = max(int(save["playerInfo"]["cash"] - price_cash), 0)
+        # Place unit (level preserved as 0 — no historical data on death)
         collected_at_timestamp = timestamp_now()
-        level = 0 # TODO 
+        level = 0
         orientation = 0
-        map["items"] += [[id, x, y, orientation, collected_at_timestamp, level]]
+        map["items"] += [[unit_id, x, y, orientation, collected_at_timestamp, level]]
 
     elif cmd == Constant.CMD_BUY_SUPER_OFFER_PACK:
         town_id = args[0]
         unknown2 = args[1] # this is probably the super offer pack ID?
         items = args[2]
-        cash_used = args[3]
-        
+        cash_used = int(args[3])
+
         map = save["maps"][town_id]
 
         item_array = items.split(',')
+        # CHE-9: enforce a floor of 10 cash per item so client can't pay 0 for a pack
+        min_cost = max(10 * len(item_array), 10)
+        if cash_used < min_cost:
+            print(f"  Super offer pack: client sent {cash_used}, floored to {min_cost}")
+            cash_used = min_cost
+
         for item in item_array:
             item_id = int(item)
             length = len(save["privateState"]["gifts"])
@@ -491,8 +552,8 @@ def do_command(USERID, cmd, args):
                     save["privateState"]["gifts"].append(0)
             save["privateState"]["gifts"][item_id] += 1
 
-        save["playerInfo"]["cash"] = max(save["playerInfo"]["cash"] - cash_used, 0)#maybe make function for editing resources
-        print(f"Used {cash_used} cash to buy super offer pack!")
+        save["playerInfo"]["cash"] = max(save["playerInfo"]["cash"] - cash_used, 0)
+        print(f"Used {cash_used} cash to buy super offer pack ({len(item_array)} items)")
 
     elif cmd == Constant.CMD_SET_STRATEGY:
         strategy_type = args[0]
@@ -506,10 +567,15 @@ def do_command(USERID, cmd, args):
         print(f"Start quest {quest_id}")
 
     elif cmd == Constant.CMD_END_QUEST:
-        data = json.loads(args[0])
+        try:
+            data = json.loads(args[0])
+        except (json.JSONDecodeError, TypeError) as e:
+            print(f"CMD_END_QUEST: bad json: {e}")
+            return
         town_id = data["map"]
         gold_gained = data["resources"]["g"]
         xp_gained = data["resources"]["x"]
+        cash_gained = data["resources"].get("c", 0)
         units = data["units"]
         win = data["win"] == 1
         duration_sec = data["duration"]
@@ -522,6 +588,9 @@ def do_command(USERID, cmd, args):
         # Resources
         save["maps"][town_id]["coins"] += int(gold_gained)
         save["maps"][town_id]["xp"] += int(xp_gained)
+        if int(cash_gained) > 0:
+            save["playerInfo"]["cash"] += int(cash_gained)
+            print(f"  Quest cash reward: +{cash_gained}")
 
         # Update quests data
         save["privateState"]["unlockedQuestIndex"] = max(quest_id + 1, save["privateState"]["unlockedQuestIndex"], 0)

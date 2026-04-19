@@ -3,7 +3,11 @@ import os
 import copy
 import uuid
 import random
+import threading
+import hashlib
+import hmac
 from flask import session
+from werkzeug.security import generate_password_hash, check_password_hash
 # from flask_session import SqlAlchemySessionInterface, current_app
 
 from version import version_code
@@ -94,9 +98,60 @@ def load_saved_villages():
             save_session(USERID)
     
 
+# Password helpers
+# New hashes use Werkzeug's PBKDF2 (format: "pbkdf2:sha256:<iter>$<salt>$<hex>" or scrypt).
+# Legacy hashes are plain SHA-256 hex (64 chars, no "$" or ":"). They are verified
+# with the old algorithm and upgraded to the new format on successful login.
+
+_HASH_METHOD = "pbkdf2:sha256:260000"
+
+def _hash_password(password: str) -> str:
+    return generate_password_hash(password, method=_HASH_METHOD)
+
+def _legacy_hash(USERID: str, password: str) -> str:
+    return hashlib.sha256((USERID + ":" + password).encode("utf-8")).hexdigest()
+
+def _is_legacy_hash(stored: str) -> bool:
+    # Werkzeug hashes contain "$" (and start with method prefix like "pbkdf2:" or "scrypt:").
+    # Legacy SHA-256 hex is 64 chars with no separators.
+    return "$" not in stored
+
+def village_has_password(USERID: str) -> bool:
+    save = session(USERID)
+    if save is None:
+        return False
+    return bool(save["playerInfo"].get("password_hash"))
+
+def verify_password(USERID: str, password: str) -> bool:
+    save = session(USERID)
+    if save is None:
+        return False
+    stored = save["playerInfo"].get("password_hash")
+    if not stored:
+        return True  # no password set on this village
+    password = password or ""
+    if _is_legacy_hash(stored):
+        # Legacy SHA-256 — constant-time check, then upgrade to new format on success.
+        candidate = _legacy_hash(USERID, password)
+        if hmac.compare_digest(candidate, stored):
+            save["playerInfo"]["password_hash"] = _hash_password(password)
+            save_session(USERID)
+            print(f" [+] Upgraded password hash to {_HASH_METHOD} for {USERID}")
+            return True
+        return False
+    # Modern Werkzeug hash
+    return check_password_hash(stored, password)
+
+def set_password(USERID: str, password: str):
+    save = session(USERID)
+    if save is None:
+        return
+    save["playerInfo"]["password_hash"] = _hash_password(password) if password else None
+    save_session(USERID)
+
 # New village
 
-def new_village() -> str:
+def new_village(name: str = None, password: str = None) -> str:
     # Generate USERID
     USERID: str = str(uuid.uuid4())
     assert USERID not in all_userid()
@@ -105,6 +160,13 @@ def new_village() -> str:
     # Custom values
     village["version"] = version_code
     village["playerInfo"]["pid"] = USERID
+    if name:
+        village["playerInfo"]["name"] = name
+        village["playerInfo"]["map_names"] = [name]
+    if password:
+        village["playerInfo"]["password_hash"] = _hash_password(password)
+    else:
+        village["playerInfo"]["password_hash"] = None
     village["maps"][0]["timestamp"] = timestamp_now()
     village["privateState"]["dartsRandomSeed"] = abs(int((2**16 - 1) * random.random()))
     # Memory saves
@@ -130,7 +192,8 @@ def save_info(USERID: str) -> dict:
     empire_name = str(save["playerInfo"]["map_names"][default_map])
     xp = save["maps"][default_map]["xp"]
     level = save["maps"][default_map]["level"]
-    return{"userid": USERID, "name": empire_name, "xp": xp, "level": level}
+    has_password = bool(save["playerInfo"].get("password_hash"))
+    return{"userid": USERID, "name": empire_name, "xp": xp, "level": level, "has_password": has_password}
 
 def all_saves_info() -> list:
     saves_info = []
@@ -238,11 +301,57 @@ def backup_session(USERID: str):
     # TODO 
     return
 
+_save_lock = threading.Lock()
+
+# Daily bonus: rotates through DAILY_BONUS_CONFIG each time >=20h passed since last claim.
+# Heroes ("hero" type) are given as gifts via save["privateState"]["gifts"] if possible;
+# otherwise fall back to giving the quantity as cash (safe default).
+_DAILY_MIN_HOURS = 20
+
+def apply_daily_bonus(USERID: str):
+    """Apply daily bonus if >=20h passed since last claim. Returns the reward dict or None."""
+    from get_game_config import get_game_config
+    save = session(USERID)
+    if save is None:
+        return None
+    ps = save["privateState"]
+    last_bonus = ps.get("lastDailyBonus", 0)
+    now = timestamp_now()
+    if last_bonus and (now - last_bonus) < _DAILY_MIN_HOURS * 3600:
+        return None
+
+    rewards = get_game_config()["globals"].get("DAILY_BONUS_CONFIG", [])
+    if not rewards:
+        return None
+
+    day = ps.get("dailyBonusDay", 0)
+    reward = rewards[day % len(rewards)]
+    qty = int(reward.get("qty", 0))
+    rtype = reward.get("type")
+
+    if rtype == "g":
+        save["maps"][0]["coins"] += qty
+    elif rtype == "c":
+        save["playerInfo"]["cash"] += qty
+    elif rtype == "hero":
+        # Give a generic hero gift: cash equivalent (fallback — picking a specific hero id
+        # requires matching the HEROES global and is beyond scope).
+        save["playerInfo"]["cash"] += qty
+    else:
+        print(f"  apply_daily_bonus: unknown reward type {rtype!r}, skipping")
+        return None
+
+    ps["dailyBonusDay"] = (day + 1) % len(rewards)
+    ps["lastDailyBonus"] = now
+    save_session(USERID)
+    print(f" [+] Daily bonus applied for {USERID}: +{qty} {rtype} (day {day})")
+    return reward
+
 def save_session(USERID: str):
-    # TODO 
     file = f"{USERID}.save.json"
     print(f" * Saving village at {file}... ", end='')
     village = session(USERID)
-    with open(os.path.join(SAVES_DIR, file), 'w') as f:
-        json.dump(village, f, indent=4)
+    with _save_lock:
+        with open(os.path.join(SAVES_DIR, file), 'w') as f:
+            json.dump(village, f, indent=4)
     print("Done.")

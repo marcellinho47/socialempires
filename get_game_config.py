@@ -42,9 +42,12 @@ def patch_game_config():
     for patch_file in os.listdir(CONFIG_PATCH_DIR):
         if patch_file.endswith(".json"):
             f = os.path.join(CONFIG_PATCH_DIR, patch_file)
-            apply_config_patch(f)
             patch = patch_file.replace(".json", "")
-            print(" * Patch applied:", patch)
+            try:
+                apply_config_patch(f)
+                print(" * Patch applied:", patch)
+            except Exception as e:
+                print(f" ! Patch FAILED '{patch}': {type(e).__name__}: {e}")
 
     # Apply mods
 
@@ -58,11 +61,14 @@ def patch_game_config():
             if mod.startswith("#"):
                 continue
             if mod != "":
-                mod.replace(".json", "")
+                mod = mod.replace(".json", "")
                 mod_path = f"{MODS_DIR}/{mod}.json"
                 if os.path.exists(mod_path):
-                    apply_config_patch(mod_path)
-                    print(" * Mod applied:", mod)
+                    try:
+                        apply_config_patch(mod_path)
+                        print(" * Mod applied:", mod)
+                    except Exception as e:
+                        print(f" ! Mod FAILED '{mod}': {type(e).__name__}: {e}")
 
     remove_duplicate_items()
 

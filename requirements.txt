@@ -1,2 +1,4 @@
 flask
 jsonpatch
+flask-wtf
+flask-limiter

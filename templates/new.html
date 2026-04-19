@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8"/>
+		<title>Social Empires — New Empire</title>
+		<link rel="shortcut icon" href="img/icon.gif"/>
+		<link rel="icon" type="image/png" href="img/icon.gif"/>
+		<link rel="stylesheet" href="css/facebook.css"/>
+	</head>
+	<body class="ego_wide canvas center_fixed_width_app fbx UIPage_LoggedOut liquid hideBanner Locale_en_US" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); overflow: auto;">
+		<center><img src="img/logo.png" style="width: 200px;"/></center>
+		<div class="mvl ptm uiInterstitial canvas_error_page uiInterstitialLarge uiBoxWhite">
+			<div class="uiHeader uiHeaderBottomBorder mhl mts uiHeaderPage interstitialHeader">
+				<div class="clearfix uiHeaderTop">
+					<div>
+						<img src="img/sword.png" height="18px" style="margin-left: 5px;">
+						<h2 class="uiHeaderTitle" style="margin-left: 2px; display: inline-block;">
+							<a href="/" style="text-decoration: none;">Social Empires </a>
+						</h2>
+						<p style="display: inline-block; margin: 0 0 4px 6px;">Create a new empire ~ {{ version | default("?")}}</p>
+					</div>
+				</div>
+			</div>
+			<div class="phl ptm uiInterstitialContent" style="overflow: auto;">
+				<br>
+				<div style="margin-left:20px; font-size:13px;">
+					{% if error %}
+					<div style="color: #b00; background: #fee; border: 1px solid #faa; padding: 6px 10px; margin-bottom: 10px; border-radius: 4px;">
+						{{ error }}
+					</div>
+					{% endif %}
+					<form method="post">
+						<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+						<b>Empire name</b>
+						<br><br>
+						<input type="text" name="name" maxlength="40" required style="height: 21px; min-width: 330px; padding: 2px 4px;" placeholder="ex: Reino do Trovão" value="{{ name | default('') }}">
+						<br><br>
+						<b>Password</b> <span style="font-size:11px; color:#666;">(opcional — proteja sua village se o servidor for compartilhado)</span>
+						<br><br>
+						<input type="password" name="password" style="height: 21px; min-width: 330px; padding: 2px 4px;" autocomplete="new-password" placeholder="deixe em branco para village sem senha">
+						<br><br>
+						<b>Game version</b>
+						<br><br>
+						<select name="GAMEVERSION" style="height: 24px;" required>
+							<option value="SocialEmpires0926bsec.swf" selected>0.9.26b (Working)</option>
+							<option value="SocialEmpires1.1.5sec.swf">1.1.5 (Experimental)</option>
+							<option value="SocialEmpires1.4.07sec.swf">1.4.07 (Experimental)</option>
+						</select>
+						<br><br>
+						<button type="submit" style="font-size:14px; height: 28px; padding: 0 16px;">Create & play</button>
+						&nbsp; <a href="/" style="font-size: 13px;">cancel</a>
+					</form>
+				</div>
+			</div>
+		</div>
+	</body>
+</html>

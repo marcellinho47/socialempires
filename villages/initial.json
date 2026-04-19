@@ -12,7 +12,8 @@
         "world_id": null,
         "sp_ref_uid": 1000,
         "sp_ref_cat_install": "ts",
-        "last_logged_in": -1
+        "last_logged_in": -1,
+        "password_hash": null
     },
     "maps": [
         {
@@ -123,6 +124,8 @@
             }
         },
         "survivalVidaTimeStamp": [],
-        "survivalVidasExtra": 0
+        "survivalVidasExtra": 0,
+        "dailyBonusDay": 0,
+        "lastDailyBonus": 0
     }
 }
