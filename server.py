@@ -14,7 +14,9 @@ from get_game_config import get_game_config, patch_game_config
 
 print (" [+] Loading players...")
 from get_player_info import get_player_info, get_neighbor_info
-from sessions import load_saved_villages, all_saves_userid, all_saves_info, save_info, new_village, fb_friends_str, neighbors, verify_password, village_has_password, apply_daily_bonus
+from sessions import (load_saved_villages, all_saves_userid, save_info, new_village,
+                      fb_friends_str, neighbors, verify_password, apply_daily_bonus,
+                      find_userid_by_email, is_valid_email, email_taken)
 load_saved_villages()
 
 print (" [+] Loading server...")
@@ -32,6 +34,10 @@ from bundle import ASSETS_DIR, STUB_DIR, TEMPLATES_DIR, BASE_DIR
 
 host = os.environ.get('SE_HOST', '127.0.0.1')
 port = int(os.environ.get('SE_PORT', '5050'))
+
+# Single supported game SWF. Kept as a constant — the multiple-versions
+# selector was removed since only 0.9.26b is known-working with Ruffle.
+GAME_SWF = "SocialEmpires0926bsec.swf"
 
 app = Flask(__name__, template_folder=TEMPLATES_DIR)
 
@@ -90,82 +96,58 @@ def login():
     session.pop('GAMEVERSION', default=None)
     # Reload saves. Allows saves modification without server reset
     load_saved_villages()
-    # If logging in, verify password (if any), set session USERID, and go to play
     if request.method == 'POST':
-        USERID = request.form['USERID']
-        GAMEVERSION = request.form['GAMEVERSION']
-        password = request.form.get('password', '')
-        if USERID not in all_saves_userid():
-            saves_info = all_saves_info()
-            return render_template("login.html", saves_info=saves_info, version=version_name,
-                                   error="Village não encontrada.")
-        if not verify_password(USERID, password):
-            print(f"[LOGIN] Bad password for {USERID}")
-            saves_info = all_saves_info()
-            return render_template("login.html", saves_info=saves_info, version=version_name,
-                                   error="Senha incorreta."), 401
+        email = (request.form.get('email') or '').strip().lower()
+        password = request.form.get('password') or ''
+        if not email or not password:
+            return render_template("login.html", version=version_name,
+                                   error="Email e senha são obrigatórios.", email=email), 400
+        USERID = find_userid_by_email(email)
+        if not USERID or not verify_password(USERID, password):
+            print(f"[LOGIN] Failed for email={email!r}")
+            return render_template("login.html", version=version_name,
+                                   error="Email ou senha incorretos.", email=email), 401
         session['USERID'] = USERID
-        session['GAMEVERSION'] = GAMEVERSION
-        print("[LOGIN] USERID:", USERID)
-        print("[LOGIN] GAMEVERSION:", GAMEVERSION)
-        # Daily bonus (if eligible)
+        session['GAMEVERSION'] = GAME_SWF
+        print(f"[LOGIN] {email} -> {USERID}")
         apply_daily_bonus(USERID)
         return redirect("/ruffle.html")
-    # Login page
-    if request.method == 'GET':
-        saves_info = all_saves_info()
-        return render_template("login.html", saves_info=saves_info, version=version_name)
-
-@app.route("/play.html")
-def play():
-    print(session)
-
-    if 'USERID' not in session:
-        return redirect("/")
-    if 'GAMEVERSION' not in session:
-        return redirect("/")
-
-    if session['USERID'] not in all_saves_userid():
-        return redirect("/")
-    
-    USERID = session['USERID']
-    GAMEVERSION = session['GAMEVERSION']
-    print("[PLAY] USERID:", USERID)
-    print("[PLAY] GAMEVERSION:", GAMEVERSION)
-    return render_template("play.html", save_info=save_info(USERID), serverTime=timestamp_now(), friendsInfo=fb_friends_str(USERID), version=version_name, GAMEVERSION=GAMEVERSION, SERVERIP=host)
+    # GET → login page
+    return render_template("login.html", version=version_name)
 
 @app.route("/ruffle.html")
 def ruffle():
-    print(session)
-
-    if 'USERID' not in session:
+    if 'USERID' not in session or session['USERID'] not in all_saves_userid():
         return redirect("/")
-    if 'GAMEVERSION' not in session:
-        return redirect("/")
-
-    if session['USERID'] not in all_saves_userid():
-        return redirect("/")
-    
     USERID = session['USERID']
-    GAMEVERSION = session['GAMEVERSION']
-    print("[RUFFLE] USERID:", USERID)
-    print("[RUFFLE] GAMEVERSION:", GAMEVERSION)
-    return render_template("ruffle.html", save_info=save_info(USERID), serverTime=timestamp_now(), version=version_name, GAMEVERSION=GAMEVERSION, SERVERIP=host)
+    GAMEVERSION = session.get('GAMEVERSION', GAME_SWF)
+    print(f"[RUFFLE] {USERID}")
+    return render_template("ruffle.html",
+                           save_info=save_info(USERID),
+                           serverTime=timestamp_now(),
+                           version=version_name,
+                           GAMEVERSION=GAMEVERSION,
+                           SERVERIP=host)
 
 
 @app.route("/new.html", methods=['GET', 'POST'])
 @limiter.limit("5 per minute;20 per hour", methods=["POST"])
 def new():
     if request.method == 'POST':
-        name = (request.form.get('name') or '').strip()
+        email = (request.form.get('email') or '').strip().lower()
         password = request.form.get('password') or ''
-        gameversion = request.form.get('GAMEVERSION') or 'SocialEmpires0926bsec.swf'
-        if not name:
-            return render_template("new.html", version=version_name, name=name,
-                                   error="Nome da village é obrigatório.")
-        USERID = new_village(name=name, password=password if password else None)
+        if not email or not password:
+            return render_template("new.html", version=version_name, email=email,
+                                   error="Email e senha são obrigatórios."), 400
+        if not is_valid_email(email):
+            return render_template("new.html", version=version_name, email=email,
+                                   error="Email em formato inválido."), 400
+        if email_taken(email):
+            return render_template("new.html", version=version_name, email=email,
+                                   error="Já existe uma conta com esse email."), 409
+        USERID = new_village(email=email, password=password)
         session['USERID'] = USERID
-        session['GAMEVERSION'] = gameversion
+        session['GAMEVERSION'] = GAME_SWF
         apply_daily_bonus(USERID)
         return redirect("/ruffle.html")
     # GET → form
@@ -238,11 +220,12 @@ def static_assets_loader(path):
 @csrf.exempt
 def track_game_status_response():
     _require_matching_userid()
-    status = request.form['status']
-    installId = request.form['installId']
-    user_id = request.form['user_id']
+    # Flash sends these as query params; use request.values (form + args).
+    status = request.values['status']
+    installId = request.values['installId']
+    user_id = request.values['user_id']
 
-    print(f"track_game_status: status={status}, installId={installId}, user_id={user_id}. --", request.form)
+    print(f"track_game_status: status={status}, installId={installId}, user_id={user_id}.")
     return ("", 200)
 
 @app.route("/dynamic.flash1.dev.socialpoint.es/appsfb/socialempiresdev/srvempires/get_game_config.php", methods=['GET','POST'])
@@ -265,16 +248,17 @@ def get_game_config_response():
 def get_player_info_response():
     _require_matching_userid()
 
-    USERID = request.form['USERID']
-    user_key = request.form['user_key']
-    spdebug = request.form.get('spdebug')
-    language = request.form['language']
-    neighbors = request.form.get('neighbors')
-    client_id = request.form['client_id']
-    user = request.form.get('user')
-    map = int(request.form['map']) if 'map' in request.form else None
+    # Flash sends args on the query string; use request.values (form + args).
+    USERID = request.values['USERID']
+    user_key = request.values['user_key']
+    spdebug = request.values.get('spdebug')
+    language = request.values['language']
+    neighbors = request.values.get('neighbors')
+    client_id = request.values['client_id']
+    user = request.values.get('user')
+    map = int(request.values['map']) if 'map' in request.values else None
 
-    print(f"get_player_info: USERID: {USERID}. user: {user} --", request.form)
+    print(f"get_player_info: USERID: {USERID}. user: {user}")
 
     # Current Player
     if user is None:
@@ -295,21 +279,20 @@ def get_player_info_response():
 @csrf.exempt
 def sync_error_track_response():
     _require_matching_userid()
-    spdebug = None
+    # Flash sends args on the query string; use request.values.
+    USERID = request.values['USERID']
+    user_key = request.values['user_key']
+    spdebug = request.values.get('spdebug')
+    language = request.values['language']
+    error = request.values['error']
+    current_failed = request.values['current_failed']
+    tries = request.values.get('tries')
+    survival = request.values['survival']
+    previous_failed = request.values['previous_failed']
+    description = request.values['description']
+    user_id = request.values['user_id']
 
-    USERID = request.form['USERID']
-    user_key = request.form['user_key']
-    spdebug = request.form.get('spdebug')
-    language = request.form['language']
-    error = request.form['error']
-    current_failed = request.form['current_failed']
-    tries = request.form.get('tries')
-    survival = request.form['survival']
-    previous_failed = request.form['previous_failed']
-    description = request.form['description']
-    user_id = request.form['user_id']
-
-    print(f"sync_error_track: USERID: {USERID}. [Error: {error}] tries: {tries}. --", request.form)
+    print(f"sync_error_track: USERID: {USERID}. [Error: {error}] tries: {tries}.")
     return ("", 200)
 
 @app.route("/null")
@@ -324,22 +307,21 @@ def flash_sync_error_response():
         reason = "reload On End Attack"
 
     print("flash_sync_error", reason, ". --", request.values)
-    return redirect("/play.html")
+    return redirect("/ruffle.html")
 
 @app.route("/dynamic.flash1.dev.socialpoint.es/appsfb/socialempiresdev/srvempires/command.php", methods=['POST'])
 @csrf.exempt
 def command_response():
     USERID = _require_matching_userid()
-    spdebug = None
 
-    user_key = request.form['user_key']
-    spdebug = request.form.get('spdebug')
-    language = request.form['language']
-    client_id = request.form['client_id']
+    user_key = request.values['user_key']
+    spdebug = request.values.get('spdebug')
+    language = request.values['language']
+    client_id = request.values['client_id']
 
-    print(f"command: USERID: {USERID}. --", request.form)
+    print(f"command: USERID: {USERID}")
 
-    data_str = request.form['data']
+    data_str = request.values['data']
     if len(data_str) < 65 or data_str[64] != ';':
         print(f"command: bad payload (len={len(data_str)})")
         return ({"error": "bad payload"}, 400)

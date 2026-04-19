@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import copy
 import uuid
 import random
@@ -149,9 +150,37 @@ def set_password(USERID: str, password: str):
     save["playerInfo"]["password_hash"] = _hash_password(password) if password else None
     save_session(USERID)
 
+# Email helpers
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+def is_valid_email(email: str) -> bool:
+    if not email or len(email) > 200:
+        return False
+    return bool(_EMAIL_RE.match(email))
+
+def find_userid_by_email(email: str) -> str:
+    """Return USERID for a given email (case-insensitive), or None."""
+    if not email:
+        return None
+    target = email.strip().lower()
+    for uid, vill in __saves.items():
+        stored = (vill["playerInfo"].get("email") or "").lower()
+        if stored and stored == target:
+            return uid
+    return None
+
+def email_taken(email: str) -> bool:
+    return find_userid_by_email(email) is not None
+
+
 # New village
 
-def new_village(name: str = None, password: str = None) -> str:
+def new_village(email: str, password: str) -> str:
+    """Create a new village. Both email and password are required."""
+    assert email and is_valid_email(email), "valid email required"
+    assert password, "password required"
+    assert not email_taken(email), "email already registered"
     # Generate USERID
     USERID: str = str(uuid.uuid4())
     assert USERID not in all_userid()
@@ -160,20 +189,19 @@ def new_village(name: str = None, password: str = None) -> str:
     # Custom values
     village["version"] = version_code
     village["playerInfo"]["pid"] = USERID
-    if name:
-        village["playerInfo"]["name"] = name
-        village["playerInfo"]["map_names"] = [name]
-    if password:
-        village["playerInfo"]["password_hash"] = _hash_password(password)
-    else:
-        village["playerInfo"]["password_hash"] = None
+    village["playerInfo"]["email"] = email.strip().lower()
+    # Empire name defaults to the local-part of the email (before @).
+    display_name = email.split("@", 1)[0][:40] or "Emperor"
+    village["playerInfo"]["name"] = display_name
+    village["playerInfo"]["map_names"] = [display_name]
+    village["playerInfo"]["password_hash"] = _hash_password(password)
     village["maps"][0]["timestamp"] = timestamp_now()
     village["privateState"]["dartsRandomSeed"] = abs(int((2**16 - 1) * random.random()))
     # Memory saves
     __saves[USERID] = village
     # Generate save file
     save_session(USERID)
-    print("Done.")
+    print(f"New village created: {email} -> {USERID}")
     return USERID
 
 # Access functions
