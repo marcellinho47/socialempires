@@ -1,0 +1,12 @@
+services:
+  server:
+    build: .
+    ports:
+      - "5050:5050"
+    environment:
+      SE_HOST: "0.0.0.0"
+      SE_PORT: "5050"
+      SE_SECRET_KEY: "troque-por-uma-chave-secreta-aleatoria"
+    volumes:
+      - ./saves:/app/saves
+      - ./download_assets:/app/download_assets
