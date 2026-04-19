@@ -1,4 +1,5 @@
 import json
+import datetime
 
 from sessions import session, save_session
 from get_game_config import get_game_config, get_level_from_xp, get_name_from_item_id, get_attribute_from_mission_id, get_xp_from_level, get_attribute_from_item_id, get_item_from_subcat_functional
@@ -488,6 +489,71 @@ def do_command(USERID, cmd, args):
         pState = save["privateState"]
         pState["bonusNextId"] = claimId + 1
         pState["timestampLastBonus"] = timestamp_now()
+
+    elif cmd == Constant.CMD_COLLECT_MONDAY_BONUS:
+        # Server enforces: only on Monday, and only once per 6 days.
+        # Client-side button may show any day; server rejects silently otherwise.
+        pState = save["privateState"]
+        now = timestamp_now()
+        last = pState.get("lastMondayBonusTs", 0)
+        today_is_monday = datetime.date.today().weekday() == 0
+        if not today_is_monday:
+            print("  Monday bonus denied: not Monday")
+            return
+        if last and (now - last) < 6 * 24 * 3600:
+            print(f"  Monday bonus denied: already claimed ({(now - last)//3600}h ago)")
+            return
+        rewards = get_game_config()["globals"].get("MONDAY_BONUS_REWARDS", [])
+        units = get_game_config()["globals"].get("MONDAY_BONUS_UNITS", [])
+        map = save["maps"][0]
+        for r in rewards:
+            rtype = r.get("type")
+            value = int(r.get("value", 0))
+            if rtype == "g":
+                map["coins"] += value
+            elif rtype == "c":
+                save["playerInfo"]["cash"] += value
+            elif rtype == "u":
+                # Units: give the configured unit ids as gifts (from MONDAY_BONUS_UNITS).
+                for unit_id in units:
+                    uid = int(unit_id)
+                    length = len(pState.get("gifts", []))
+                    if length <= uid:
+                        for _ in range(uid - length + 1):
+                            pState.setdefault("gifts", []).append(0)
+                    pState["gifts"][uid] += 1
+        pState["lastMondayBonusTs"] = now
+        print(f"  Monday bonus applied: {rewards}")
+
+    elif cmd == Constant.CMD_COLLECT_COMEBACK_BONUS:
+        # Comeback bonus: awarded when a player returns after a long absence.
+        # Server enforces: only once per 30 days.
+        pState = save["privateState"]
+        now = timestamp_now()
+        last = pState.get("lastComebackBonusTs", 0)
+        if last and (now - last) < 30 * 24 * 3600:
+            print(f"  Comeback bonus denied: already claimed ({(now - last)//3600}h ago)")
+            return
+        rewards = get_game_config()["globals"].get("COMEBACK_BONUS_REWARDS", [])
+        units = get_game_config()["globals"].get("COMEBACK_BONUS_UNITS", [])
+        map = save["maps"][0]
+        for r in rewards:
+            rtype = r.get("type")
+            value = int(r.get("value", 0))
+            if rtype == "g":
+                map["coins"] += value
+            elif rtype == "c":
+                save["playerInfo"]["cash"] += value
+            elif rtype == "u":
+                for unit_id in units:
+                    uid = int(unit_id)
+                    length = len(pState.get("gifts", []))
+                    if length <= uid:
+                        for _ in range(uid - length + 1):
+                            pState.setdefault("gifts", []).append(0)
+                    pState["gifts"][uid] += 1
+        pState["lastComebackBonusTs"] = now
+        print(f"  Comeback bonus applied: {rewards}")
 
     elif cmd == Constant.CMD_ADMIN_ADD_ANIMAL:
         # CHE-1: Client-facing "admin" command disabled. Original would let any

@@ -127,6 +127,8 @@
         "survivalVidaTimeStamp": [],
         "survivalVidasExtra": 0,
         "dailyBonusDay": 0,
-        "lastDailyBonus": 0
+        "lastDailyBonus": 0,
+        "lastMondayBonusTs": 0,
+        "lastComebackBonusTs": 0
     }
 }

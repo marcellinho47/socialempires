@@ -34,6 +34,7 @@ from bundle import ASSETS_DIR, STUB_DIR, TEMPLATES_DIR, BASE_DIR
 
 host = os.environ.get('SE_HOST', '127.0.0.1')
 port = int(os.environ.get('SE_PORT', '5050'))
+public_host = os.environ.get('SE_PUBLIC_HOST', '127.0.0.1' if host == '0.0.0.0' else host)
 
 # Single supported game SWF. Kept as a constant — the multiple-versions
 # selector was removed since only 0.9.26b is known-working with Ruffle.
@@ -127,7 +128,7 @@ def ruffle():
                            serverTime=timestamp_now(),
                            version=version_name,
                            GAMEVERSION=GAMEVERSION,
-                           SERVERIP=host)
+                           SERVERIP=public_host)
 
 
 @app.route("/new.html", methods=['GET', 'POST'])
