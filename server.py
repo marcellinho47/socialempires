@@ -35,6 +35,15 @@ from bundle import ASSETS_DIR, STUB_DIR, TEMPLATES_DIR, BASE_DIR
 host = os.environ.get('SE_HOST', '127.0.0.1')
 port = int(os.environ.get('SE_PORT', '5050'))
 public_host = os.environ.get('SE_PUBLIC_HOST', '127.0.0.1' if host == '0.0.0.0' else host)
+# When running behind an HTTPS reverse proxy (Cloudflare Tunnel, nginx, etc.),
+# set SE_HTTPS=1 so public URLs built for the Flash client use https:// and
+# skip the :PORT suffix (the proxy listens on the standard 443).
+_is_https = os.environ.get('SE_HTTPS', '').lower() in ('1', 'true', 'yes')
+if _is_https:
+    PUBLIC_URL = f"https://{public_host}"
+else:
+    # Local/dev: include the port so the SWF can reach the Flask dev server.
+    PUBLIC_URL = f"http://{public_host}:{port}"
 
 # Single supported game SWF. Kept as a constant — the multiple-versions
 # selector was removed since only 0.9.26b is known-working with Ruffle.
@@ -52,7 +61,7 @@ app.config['MAX_CONTENT_LENGTH'] = 256 * 1024
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
-    SESSION_COOKIE_SECURE=os.environ.get('SE_HTTPS', '').lower() in ('1', 'true', 'yes'),
+    SESSION_COOKIE_SECURE=_is_https,
 )
 
 # CSRF protection for browser forms. The Flash SWF posts to /dynamic.* routes
@@ -128,7 +137,7 @@ def ruffle():
                            serverTime=timestamp_now(),
                            version=version_name,
                            GAMEVERSION=GAMEVERSION,
-                           SERVERIP=public_host)
+                           PUBLIC_URL=PUBLIC_URL)
 
 
 @app.route("/new.html", methods=['GET', 'POST'])
