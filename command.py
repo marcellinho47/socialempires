@@ -111,6 +111,16 @@ def do_command(USERID, cmd, args):
         map = save["maps"][town_id]
         apply_collect(save["playerInfo"], map, id, resource_multiplier)
         save["playerInfo"]["cash"] = max(save["playerInfo"]["cash"] - cash_to_substract, 0)
+        # Reset the item's collected_at_timestamp so its production cooldown
+        # starts over. Without this, the mine/field on the map keeps its
+        # original timestamp forever and the client can't reason about
+        # readiness across sessions.
+        now_ts = timestamp_now()
+        for item in map["items"]:
+            if item[0] == id and item[1] == x and item[2] == y:
+                if len(item) > 4:
+                    item[4] = now_ts
+                break
     
     elif cmd == Constant.CMD_SELL:
         x = args[0]
@@ -746,9 +756,15 @@ def do_command(USERID, cmd, args):
     elif cmd == Constant.CMD_ADD_COLLECTABLE:
         collection_id = args[0]
         collectible_id = args[1]
-        # TODO 
+        # TODO
 
     else:
-        print(f"Unhandled command '{cmd}' -> args", args)
+        # Shape-revealing log: UNHANDLED <cmd> [<num_args>]: <json-of-args>
+        # easy to grep in `docker logs ... | grep "UNHANDLED "`.
+        try:
+            args_preview = json.dumps(args)[:500]
+        except Exception:
+            args_preview = repr(args)[:500]
+        print(f"UNHANDLED {cmd!r} [{len(args) if hasattr(args, '__len__') else '?'}]: {args_preview}")
         return
     
