@@ -96,8 +96,17 @@ def do_command(USERID, cmd, args):
         town_id = args[2]
         id = args[3]
         num_units_contained_when_harvested = args[4]#TODO does this affect multiplier?
-        resource_multiplier = args[5]
-        cash_to_substract = args[6]
+        resource_multiplier = float(args[5])
+        cash_to_substract = int(args[6])
+        # CHE-6: cap multiplier — legit "mouseUsed" booster is 5x, anything above is cheat
+        if resource_multiplier < 0:
+            resource_multiplier = 0
+        MAX_COLLECT_MULT = 5.0
+        if resource_multiplier > MAX_COLLECT_MULT:
+            print(f"  CMD_COLLECT: multiplier capped {resource_multiplier} -> {MAX_COLLECT_MULT}")
+            resource_multiplier = MAX_COLLECT_MULT
+        # Also cap the booster cost claim (client-supplied)
+        cash_to_substract = max(0, min(cash_to_substract, 10))
         print("Collect", str(get_name_from_item_id(id)))
         map = save["maps"][town_id]
         apply_collect(save["playerInfo"], map, id, resource_multiplier)
@@ -133,6 +142,11 @@ def do_command(USERID, cmd, args):
         map = save["maps"][town_id]
         for item in map["items"]:
             if item[0] == id and item[1] == x and item[2] == y:
+                # C.3: remember the level at death so resurrect can restore it.
+                # item tuple: [item_id, x, y, orientation, collected_at, level, ...]
+                level_at_death = int(item[5]) if len(item) > 5 else 0
+                if level_at_death > 0:
+                    save["privateState"].setdefault("hero_levels", {})[str(id)] = level_at_death
                 apply_collect_xp(map, id)
                 map["items"].remove(item)
                 break
@@ -146,8 +160,12 @@ def do_command(USERID, cmd, args):
             return
         print("Complete mission", mission_id, ":", str(get_attribute_from_mission_id(mission_id, "title")))
         if skipped_with_cash:
-            cash_to_substract = 0 # TODO
-            save["playerInfo"]["cash"] = max(save["playerInfo"]["cash"] - cash_to_substract, 0)
+            # C.1: Mission config has no skip_price field. Heuristic: proportional
+            # to the gold reward (richer missions cost more to skip). Clamp 1..25.
+            reward = int(get_attribute_from_mission_id(mission_id, "reward") or 0)
+            skip_cost = max(1, min(25, reward // 200))
+            save["playerInfo"]["cash"] = max(save["playerInfo"]["cash"] - skip_cost, 0)
+            print(f"  Skipped with cash: -{skip_cost}")
         save["privateState"]["completedMissions"] += [mission_id]
 
     elif cmd == Constant.CMD_REWARD_MISSION:
@@ -461,11 +479,42 @@ def do_command(USERID, cmd, args):
         pState["timeStampTakeCareMonster"] = -1 # remove timer
 
     elif cmd == Constant.CMD_WIN_BONUS:
-        coins = args[0]
+        coins = int(args[0])
         town_id = args[1]
-        hero = args[2]
-        claimId = args[3]
-        cash = args[4]
+        hero = int(args[2])
+        claimId = int(args[3])
+        cash = int(args[4])
+        pState = save["privateState"]
+
+        # CHE-4 replay protection: claimId must match the next expected id
+        expected_id = pState.get("bonusNextId", 0)
+        if claimId != expected_id:
+            print(f"  WIN_BONUS rejected: claimId {claimId} != expected {expected_id}")
+            return
+
+        # CHE-4 rate limit: at least 30 min between claims
+        now = timestamp_now()
+        last = pState.get("timestampLastBonus", 0)
+        if last and (now - last) < 30 * 60:
+            print(f"  WIN_BONUS rejected: only {(now - last) // 60} min since last claim")
+            return
+
+        # CHE-4 value caps: align with MONDAY_BONUS_REWARDS magnitudes
+        # (server has no authoritative table per-event, so cap generously)
+        WIN_BONUS_MAX_CASH  = 10    # 2x Monday cash
+        WIN_BONUS_MAX_COINS = 5000  # 2x Monday gold
+        WIN_BONUS_MAX_HERO  = 1     # exactly 0 or 1 hero gift
+        if cash < 0 or coins < 0 or hero < 0:
+            print(f"  WIN_BONUS rejected: negative values")
+            return
+        if cash > WIN_BONUS_MAX_CASH:
+            print(f"  WIN_BONUS cash capped: {cash} -> {WIN_BONUS_MAX_CASH}")
+            cash = WIN_BONUS_MAX_CASH
+        if coins > WIN_BONUS_MAX_COINS:
+            print(f"  WIN_BONUS coins capped: {coins} -> {WIN_BONUS_MAX_COINS}")
+            coins = WIN_BONUS_MAX_COINS
+        if hero > WIN_BONUS_MAX_HERO:
+            hero = WIN_BONUS_MAX_HERO
 
         print("Claiming Win Bonus")
         map = save["maps"][town_id]
@@ -486,9 +535,8 @@ def do_command(USERID, cmd, args):
             save["privateState"]["gifts"][hero] += 1
             print("Added Hero ID=" + str(hero))
 
-        pState = save["privateState"]
         pState["bonusNextId"] = claimId + 1
-        pState["timestampLastBonus"] = timestamp_now()
+        pState["timestampLastBonus"] = now
 
     elif cmd == Constant.CMD_COLLECT_MONDAY_BONUS:
         # Server enforces: only on Monday, and only once per 6 days.
@@ -589,9 +637,14 @@ def do_command(USERID, cmd, args):
         else:
             price_cash = get_game_config()["globals"]["GRAVEYARD_POTIONS"]["price"]["c"]
             save["playerInfo"]["cash"] = max(int(save["playerInfo"]["cash"] - price_cash), 0)
-        # Place unit (level preserved as 0 — no historical data on death)
+        # C.3: restore the level the unit had at CMD_KILL time (0 if no record).
+        # hero_levels is consumed on resurrect so successive deaths don't double-grant.
+        hero_levels = save["privateState"].get("hero_levels", {})
+        level = int(hero_levels.pop(str(unit_id), 0))
+        if level:
+            print(f"  Restored level {level} from death record")
+            save["privateState"]["hero_levels"] = hero_levels
         collected_at_timestamp = timestamp_now()
-        level = 0
         orientation = 0
         map["items"] += [[unit_id, x, y, orientation, collected_at_timestamp, level]]
 
@@ -639,23 +692,47 @@ def do_command(USERID, cmd, args):
             print(f"CMD_END_QUEST: bad json: {e}")
             return
         town_id = data["map"]
-        gold_gained = data["resources"]["g"]
-        xp_gained = data["resources"]["x"]
-        cash_gained = data["resources"].get("c", 0)
+        gold_gained = int(data["resources"]["g"])
+        xp_gained = int(data["resources"]["x"])
+        cash_gained = int(data["resources"].get("c", 0))
         units = data["units"]
         win = data["win"] == 1
-        duration_sec = data["duration"]
+        duration_sec = int(data.get("duration", 0))
         voluntary_end = data["voluntary_end"] == 1
         quest_id = int(data["quest_id"])
         item_rewards = data["item_rewards"] if "item_rewards" in data else None
         activators_left = data["activators_left"] if "activators_left" in data else None
         difficulty = data["difficulty"]
 
+        # CHE-5 anti-cheat: cap rewards using MAX_*_QUEST from game config.
+        # God difficulty is the highest tier (35000g / 8500 xp). Client-sent values
+        # above those are rejected to the cap.
+        globs = get_game_config()["globals"]
+        MAX_GOLD = int(globs.get("MAX_GOLD_GOD_QUEST", 35000))
+        MAX_XP = int(globs.get("MAX_XP_GOD_QUEST", 8500))
+        MAX_CASH_PER_QUEST = 50
+        MIN_QUEST_DURATION = 10  # seconds — prevents insta-win cheese
+        if gold_gained < 0 or xp_gained < 0 or cash_gained < 0:
+            print("CMD_END_QUEST rejected: negative rewards")
+            return
+        if duration_sec < MIN_QUEST_DURATION and win:
+            print(f"CMD_END_QUEST: suspicious duration {duration_sec}s, zeroing rewards")
+            gold_gained = xp_gained = cash_gained = 0
+        if gold_gained > MAX_GOLD:
+            print(f"CMD_END_QUEST: gold capped {gold_gained} -> {MAX_GOLD}")
+            gold_gained = MAX_GOLD
+        if xp_gained > MAX_XP:
+            print(f"CMD_END_QUEST: xp capped {xp_gained} -> {MAX_XP}")
+            xp_gained = MAX_XP
+        if cash_gained > MAX_CASH_PER_QUEST:
+            print(f"CMD_END_QUEST: cash capped {cash_gained} -> {MAX_CASH_PER_QUEST}")
+            cash_gained = MAX_CASH_PER_QUEST
+
         # Resources
-        save["maps"][town_id]["coins"] += int(gold_gained)
-        save["maps"][town_id]["xp"] += int(xp_gained)
-        if int(cash_gained) > 0:
-            save["playerInfo"]["cash"] += int(cash_gained)
+        save["maps"][town_id]["coins"] += gold_gained
+        save["maps"][town_id]["xp"] += xp_gained
+        if cash_gained > 0:
+            save["playerInfo"]["cash"] += cash_gained
             print(f"  Quest cash reward: +{cash_gained}")
 
         # Update quests data
