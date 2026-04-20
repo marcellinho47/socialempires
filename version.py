@@ -2,8 +2,25 @@ import random
 
 from engine import timestamp_now
 
-version_name = "alpha 0.04"
-version_code = "0.04a"
+version_name = "alpha 0.05"
+version_code = "0.05a"
+
+# Item IDs that belong to battle/campaign maps (enemies, battle-only buildings).
+# When the SWF opens a battle (e.g. rescue princess), it spams CMD_BUY with
+# bool_dont_modify_resources=1 to place these; the old handler persisted them
+# into the player's village save. The 0.04a→0.05a migration scrubs them.
+_BATTLE_ITEM_IDS = {
+    83,   # Prisoner Princess
+    135,  # Troll Cave
+    291,  # Troll Tower I
+    292,  # Troll Tower II (guess — same family)
+    305,  # Troll Wall II
+    304,  # Troll Wall I (guess)
+    525,  # Small Troll
+    526,  # Devious Troll
+    527,  # Big Troll
+    530,  # Axethrower
+}
 
 def migrate_loaded_save(save: dict) -> bool:
 
@@ -63,9 +80,18 @@ def migrate_loaded_save(save: dict) -> bool:
         save["version"] = "0.04a"
         print("   > migrated to 0.04a")
 
-    # 0.04a -> 0.05a
-    #if save["version"] == "0.04a":
-    #    save["version"] = "0.05a"
-    #    print("   > migrated to 0.05a")
+    # 0.04a -> 0.05a: scrub battle enemies accidentally persisted from
+    # rescue-princess / troll campaigns by the old CMD_BUY handler.
+    if save["version"] == "0.04a":
+        scrubbed = 0
+        for m in save.get("maps", []):
+            items = m.get("items", [])
+            kept = [it for it in items if (len(it) > 0 and it[0] not in _BATTLE_ITEM_IDS)]
+            scrubbed += len(items) - len(kept)
+            m["items"] = kept
+        if scrubbed:
+            print(f"   > 0.05a cleanup: removed {scrubbed} battle items from map(s)")
+        save["version"] = "0.05a"
+        print("   > migrated to 0.05a")
 
     return True

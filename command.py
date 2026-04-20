@@ -50,19 +50,28 @@ def do_command(USERID, cmd, args):
         bool_dont_modify_resources = bool(args[5]) # 1 if the game "buys" for you, so does not substract whatever the item cost is.
         price_multiplier = args[6]
         type = args[7]
-        print("Add", str(get_name_from_item_id(id)), "at", f"({x},{y})")
+        print("Add", str(get_name_from_item_id(id)), "at", f"({x},{y})", "free" if bool_dont_modify_resources else "paid")
         collected_at_timestamp = timestamp_now()
         level = 0 # TODO
         orientation = 0
         map = save["maps"][town_id]
-        # CHE-7: only honor the "free item" flag during tutorial (initial buildings).
-        # After tutorial completes, always charge — prevents client from faking free items.
-        tutorial_active = save["playerInfo"].get("completed_tutorial", 0) == 0
-        free_ok = bool_dont_modify_resources and tutorial_active
-        if not free_ok:
-            apply_cost(save["playerInfo"], map, id, price_multiplier)
-            xp = int(get_attribute_from_item_id(id, "xp"))
-            map["xp"] = map["xp"] + xp
+        if bool_dont_modify_resources:
+            # The client is telling us the placement is game-generated
+            # (campaign enemies, quest cutscenes, event setup). Don't charge
+            # and — critically — don't persist it. The log shows these floods
+            # during battles: Troll Wall II, Axethrower, Prisoner Princess,
+            # etc. at battle-map coordinates. Persisting them corrupts the
+            # village save and makes the game re-offer the same mission on
+            # next login (because the unfinished-looking battle is still
+            # "in progress" from the save's perspective).
+            # Trade-off: if a legitimate gift/event placement uses bool=1
+            # (e.g. a quest-reward free building), it also won't persist —
+            # to be revisited if that turns out to be a real pattern. For
+            # now, the battle-pollution case is the observed one.
+            return
+        apply_cost(save["playerInfo"], map, id, price_multiplier)
+        xp = int(get_attribute_from_item_id(id, "xp"))
+        map["xp"] = map["xp"] + xp
         map["items"] += [[id, x, y, orientation, collected_at_timestamp, level]]
     
     elif cmd == Constant.CMD_COMPLETE_TUTORIAL:
