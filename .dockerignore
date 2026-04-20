@@ -1,0 +1,40 @@
+# Keep the build context tight so `COPY . .` doesn't spend minutes on dirs
+# that the server doesn't need or that live in host bind mounts anyway.
+
+# Git history — 1.3GB, never needed at runtime
+.git/
+
+# Python venvs and bytecode
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime-mounted volumes (see docker-compose.yml in infra/stage)
+saves/
+download_assets/
+
+# Build artifacts
+build/
+dist/
+
+# Flash Player installers (Windows-only, 41MB)
+distr/
+
+# Developer-only tooling
+tools/
+.claude/
+.vscode/
+.idea/
+.vs/
+
+# OS junk
+.DS_Store
+*.lnk
+
+# Env samples / docs (not needed at runtime)
+.env
+.env.example
+
+# Large doc/preservation files we don't serve
+prompts

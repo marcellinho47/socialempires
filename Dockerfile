@@ -2,19 +2,28 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Deps só com o que o pip/SSL precisa (curl pra healthcheck opcional)
+# Small deps (curl for HEALTHCHECK)
 RUN apt-get update && apt-get install -y --no-install-recommends \
       curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Instala deps primeiro (melhor cache)
+# Python deps — cached unless requirements.txt changes
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia o código — saves/ e download_assets/ são bind mounts em runtime
-COPY . .
+# COPY order: least-likely-to-change → most-likely-to-change.
+# Each COPY is its own layer so code-only commits skip the heavy assets
+# layer entirely (and `docker compose build socialempires` goes from
+# ~60s to a few seconds).
+COPY stub/ ./stub/
+COPY assets/ ./assets/
+COPY config/ ./config/
+COPY mods/ ./mods/
+COPY villages/ ./villages/
+COPY templates/ ./templates/
+# Python sources change most often — keep last
+COPY *.py ./
 
-# Default envs (sobrescrevíveis pelo compose)
 ENV SE_HOST=0.0.0.0 \
     SE_PORT=5050 \
     PYTHONUNBUFFERED=1
