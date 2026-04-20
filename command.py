@@ -138,6 +138,15 @@ def do_command(USERID, cmd, args):
         town_id = args[3]
         bool_dont_modify_resources = args[4]
         reason = args[5]
+        if reason == 'CLEAN_0':
+            # Battle setup cleanup: the SWF clears items inside the area
+            # where the campaign/attack map will render. This is ephemeral,
+            # the items belong to the player's real village and must not
+            # be removed from the save. Re-placements that follow come as
+            # CMD_BUY bool=1 (also ignored), so the net effect is
+            # "village state untouched while the battle runs client-side".
+            print(f"  CMD_SELL CLEAN_0 ignored for {get_name_from_item_id(id)} at ({x},{y}) — ephemeral battle cleanup")
+            return
         print("Remove", str(get_name_from_item_id(id)), "from", f"({x},{y}). Reason: {reason}")
         map = save["maps"][town_id]
         for item in map["items"]:
