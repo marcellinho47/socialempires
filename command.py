@@ -776,6 +776,33 @@ def do_command(USERID, cmd, args):
         collectible_id = args[1]
         # TODO
 
+    elif cmd == Constant.CMD_ACTIVATE:
+        # User clicks "activate" on a production building (mine/mill/farm)
+        # to start (or reset) its production cycle. The SWF sends:
+        #   [x, y, town_id, item_id, frame]
+        # where `frame` is a visual state marker (4 is what we've seen for
+        # the first-activation state). The server needs to reset
+        # item[4] (collected_at_timestamp) so the client's countdown
+        # starts now, and persist the frame so next page load re-renders
+        # the building in its activated state.
+        # Without this handler the mine looks active on-screen but is
+        # silently not tracked in the save — after a logout/login the
+        # player sees it idle again ("minas não estão mais trabalhando").
+        x = args[0]
+        y = args[1]
+        town_id = args[2]
+        item_id = args[3]
+        frame = args[4] if len(args) > 4 else 0
+        print(f"Activate {get_name_from_item_id(item_id)} at ({x},{y}), frame={frame}")
+        map = save["maps"][town_id]
+        for item in map["items"]:
+            if item[0] == item_id and item[1] == x and item[2] == y:
+                if len(item) > 3:
+                    item[3] = frame
+                if len(item) > 4:
+                    item[4] = timestamp_now()
+                break
+
     else:
         # Shape-revealing log: UNHANDLED <cmd> [<num_args>]: <json-of-args>
         # easy to grep in `docker logs ... | grep "UNHANDLED "`.
