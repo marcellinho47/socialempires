@@ -40,63 +40,75 @@ __saves = {}  # ALL saved villages
 
 __initial_village = json.load(open(os.path.join(VILLAGES_DIR, "initial.json")))
 
+# Guards both the __saves dict (reset + load) and save_session's file write.
+# RLock so a save_session call nested inside load_saved_villages (during
+# migration) doesn't deadlock on itself.
+_save_lock = threading.RLock()
+
 # Load saved villages
 
 def load_saved_villages():
+    """Reset the in-memory state and reload every save from disk.
+    Called once at startup. Do NOT call on every request — it wipes in-memory
+    mutations that haven't been persisted yet (race with active command
+    batches). If you need to pick up a manually-edited save in prod,
+    restart the container.
+    """
     global __villages
     global __saves
-    # Empty in memory
-    __villages = {}
-    __saves = {}
-    # Saves dir check
-    if not os.path.exists(SAVES_DIR):
-        try:
-            print(f"Creating '{SAVES_DIR}' folder...")
-            os.mkdir(SAVES_DIR)
-        except:
-            print(f"Could not create '{SAVES_DIR}' folder.")
+    with _save_lock:
+        # Empty in memory
+        __villages = {}
+        __saves = {}
+        # Saves dir check
+        if not os.path.exists(SAVES_DIR):
+            try:
+                print(f"Creating '{SAVES_DIR}' folder...")
+                os.mkdir(SAVES_DIR)
+            except:
+                print(f"Could not create '{SAVES_DIR}' folder.")
+                exit(1)
+        if not os.path.isdir(SAVES_DIR):
+            print(f"'{SAVES_DIR}' is not a folder... Move the file somewhere else.")
             exit(1)
-    if not os.path.isdir(SAVES_DIR):
-        print(f"'{SAVES_DIR}' is not a folder... Move the file somewhere else.")
-        exit(1)
-    # Static neighbors in /villages
-    for file in os.listdir(VILLAGES_DIR):
-        if file == "initial.json" or not file.endswith(".json"):
-            continue
-        print(f" * Loading static neighbour {file}... ", end='')
-        village = json.load(open(os.path.join(VILLAGES_DIR, file)))
-        if not is_valid_village(village):
-            print("Invalid neighbour")
-            continue
-        USERID = village["playerInfo"]["pid"]
-        if str(USERID) in __villages:
-            print(f"Ignored: duplicated PID '{USERID}'.")
-        else:
-            __villages[str(USERID)] = village
-            print("Ok.")
-    # Saves in /saves
-    for file in os.listdir(SAVES_DIR):
-        if not file.endswith(".save.json"):
-            continue
-        print(f" * Loading save at {file}... ", end='')
-        try:
-            save = json.load(open(os.path.join(SAVES_DIR, file)))
-        except json.decoder.JSONDecodeError as e:
-            print("Corrupted JSON.")
-            continue
-        if not is_valid_village(save):
-            print("Invalid Save.")
-            continue
-        USERID = save["playerInfo"]["pid"]
-        try:
-            map_name = save["playerInfo"]["map_names"][ save["playerInfo"]["default_map"] ]
-        except:
-            map_name = '?'
-        print(f"({map_name}) Ok.")
-        __saves[str(USERID)] = save
-        modified = migrate_loaded_save(save) # check save version for migration
-        if modified:
-            save_session(USERID)
+        # Static neighbors in /villages
+        for file in os.listdir(VILLAGES_DIR):
+            if file == "initial.json" or not file.endswith(".json"):
+                continue
+            print(f" * Loading static neighbour {file}... ", end='')
+            village = json.load(open(os.path.join(VILLAGES_DIR, file)))
+            if not is_valid_village(village):
+                print("Invalid neighbour")
+                continue
+            USERID = village["playerInfo"]["pid"]
+            if str(USERID) in __villages:
+                print(f"Ignored: duplicated PID '{USERID}'.")
+            else:
+                __villages[str(USERID)] = village
+                print("Ok.")
+        # Saves in /saves
+        for file in os.listdir(SAVES_DIR):
+            if not file.endswith(".save.json"):
+                continue
+            print(f" * Loading save at {file}... ", end='')
+            try:
+                save = json.load(open(os.path.join(SAVES_DIR, file)))
+            except json.decoder.JSONDecodeError as e:
+                print("Corrupted JSON.")
+                continue
+            if not is_valid_village(save):
+                print("Invalid Save.")
+                continue
+            USERID = save["playerInfo"]["pid"]
+            try:
+                map_name = save["playerInfo"]["map_names"][ save["playerInfo"]["default_map"] ]
+            except:
+                map_name = '?'
+            print(f"({map_name}) Ok.")
+            __saves[str(USERID)] = save
+            modified = migrate_loaded_save(save) # check save version for migration
+            if modified:
+                save_session(USERID)
     
 
 # Password helpers
@@ -326,10 +338,8 @@ def is_valid_village(save: dict):
 # Persistency
 
 def backup_session(USERID: str):
-    # TODO 
+    # TODO
     return
-
-_save_lock = threading.Lock()
 
 # Daily bonus: rotates through DAILY_BONUS_CONFIG each time >=20h passed since last claim.
 # Heroes ("hero" type) are given as gifts via save["privateState"]["gifts"] if possible;

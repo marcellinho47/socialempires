@@ -104,8 +104,12 @@ def login():
     # Log out previous session
     session.pop('USERID', default=None)
     session.pop('GAMEVERSION', default=None)
-    # Reload saves. Allows saves modification without server reset
-    load_saved_villages()
+    # NOTE: do NOT call load_saved_villages() here. Reloading the global __saves
+    # while another user's command batch is mid-mutation races with save_session,
+    # causing lost completeness flags (completed_tutorial, completedMissions,
+    # unlockedQuestIndex, etc.). The in-memory dict is the source of truth while
+    # the container is running; saves are loaded once at startup and written on
+    # every mutation via save_session.
     if request.method == 'POST':
         email = (request.form.get('email') or '').strip().lower()
         password = request.form.get('password') or ''
