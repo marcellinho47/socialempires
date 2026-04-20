@@ -777,17 +777,17 @@ def do_command(USERID, cmd, args):
         # TODO
 
     elif cmd == Constant.CMD_ACTIVATE:
-        # User clicks "activate" on a production building (mine/mill/farm)
-        # to start (or reset) its production cycle. The SWF sends:
-        #   [x, y, town_id, item_id, frame]
-        # where `frame` is a visual state marker (4 is what we've seen for
-        # the first-activation state). The server needs to reset
-        # item[4] (collected_at_timestamp) so the client's countdown
-        # starts now, and persist the frame so next page load re-renders
-        # the building in its activated state.
-        # Without this handler the mine looks active on-screen but is
-        # silently not tracked in the save — after a logout/login the
-        # player sees it idle again ("minas não estão mais trabalhando").
+        # Visual activation signal from the SWF for production buildings
+        # (mines/mills/farms). Args: [x, y, town_id, item_id, frame].
+        #
+        # IMPORTANT: the SWF re-fires CMD_ACTIVATE for the same items on
+        # every login (we see it four times for the same Stone/Gold/Lumber
+        # Mill and Mill I in the stage log). We therefore MUST NOT reset
+        # item[4] (collected_at_timestamp) here — doing that would drag
+        # the production cooldown back to zero at every login and the mine
+        # would never mature across sessions. Only persist the frame into
+        # the item's orientation slot so the client re-renders the
+        # building in its active visual state.
         x = args[0]
         y = args[1]
         town_id = args[2]
@@ -799,8 +799,6 @@ def do_command(USERID, cmd, args):
             if item[0] == item_id and item[1] == x and item[2] == y:
                 if len(item) > 3:
                     item[3] = frame
-                if len(item) > 4:
-                    item[4] = timestamp_now()
                 break
 
     else:
